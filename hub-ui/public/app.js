@@ -9,7 +9,7 @@ const api = async (path, method = 'GET', body) => {
 };
 const fmtT = (ts) => new Date(ts).toLocaleString('tr-TR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
-const S = { provs: null, provsAt: 0, rate: null, agents: [], cur: null, msgs: {}, more: {}, tab: null, stream: '', running: new Set(), hist: [], hi: -1 };
+const S = { provs: null, provsAt: 0, rate: null, agents: [], cur: null, msgs: {}, more: {}, tab: null, stream: '', running: new Set(), hist: [], hi: -1, att: [] };
 const cur = () => S.agents.find((a) => a.id === S.cur);
 try { S.cur = localStorage.getItem('hub.cur'); } catch { /* */ }
 
@@ -51,7 +51,7 @@ $('#agentList').ondblclick = async (e) => {
 async function select(id) {
   S.cur = id; S.stream = '';
   try { localStorage.setItem('hub.cur', id); } catch { /* */ }
-  renderSide(); renderTop();
+  renderSide(); renderTop(); renderAtt();
   await loadMsgs(id);
   renderChat(true); renderCards();
   if (S.tab) renderPanel();
@@ -95,11 +95,11 @@ async function loadMsgs(id, before) {
 }
 function msgHtml(m) {
   const t = m.role;
-  if (t === 'assistant') return `<div class="m assistant">${md(m.text)}</div>`;
+  if (t === 'assistant') return `<div class="m assistant">${md(m.text)}${mediaView(m.agent_id || S.cur, m.meta.media)}</div>`;
   if (t === 'tool') return `<div class="m tool">${esc(m.text)}</div>`;
-  if (t === 'tool_result') return `<div class="m tool_result ${m.meta.is_error ? 'err' : ''}">${esc(m.text)}</div>`;
+  if (t === 'tool_result') return `<div class="m tool_result ${m.meta.is_error ? 'err' : ''}">${esc(m.text)}${mediaView(m.agent_id || S.cur, m.meta.media)}</div>`;
   if (t === 'agent_in') return `<div class="m agent_in"><small>↘ agent mesajı · ${fmtT(m.ts)}</small>${esc(m.text)}${cur() && cur().autonomy === 'ask' ? `<br><button data-process="${m.id}">İşle</button>` : ''}</div>`;
-  if (t === 'user') return `<div class="m user">${esc(m.text)}</div>`;
+  if (t === 'user') return `<div class="m user">${esc(m.text)}${m.meta.files ? `<div class="files">${m.meta.files.map((f) => fileView(m.agent_id || S.cur, f)).join('')}</div>` : ''}</div>`;
   return `<div class="m system ${m.meta.is_error ? 'err' : ''}">${esc(m.text)}</div>`;
 }
 function renderChat(bottom) {
@@ -121,12 +121,17 @@ $('#chat').onclick = async (e) => {
 // ── gönder ──
 async function send(text, decision) {
   const a = cur(); if (!a) return;
-  text = text.trim(); if (!text) return;
-  if (text.startsWith('/')) { if (await slash(text)) return; }
+  text = text.trim();
+  const files = S.att.filter((f) => f.agent === a.id && f.path).map(({ path, name, image }) => ({ path, name, image }));
+  if (!text && !files.length) return;
+  if (text.startsWith('/') && !files.length) { if (await slash(text)) return; }
+  if (S.att.some((f) => f.agent === a.id && f.up)) return alert('Dosya yükleniyor, birazdan tekrar dene.');
   try {
-    const r = await api(`/agents/${a.id}/send`, 'POST', { text, decision });
+    const r = await api(`/agents/${a.id}/send`, 'POST', { text, decision, files });
     if (r.similar) return showSimilar(text, r.similar);
-    S.hist.unshift(text); S.hi = -1;
+    S.att = S.att.filter((f) => f.agent !== a.id); renderAtt();
+    if (text) S.hist.unshift(text);
+    S.hi = -1;
     $('#cards .sim-card')?.remove();
   } catch (e) { alert(e.message); }
 }
@@ -199,6 +204,82 @@ function approvalCard(ap) {
   return el;
 }
 
+// ── üretilen medya gösterimi ──
+const mediaUrl = (agent, p, dl) => `/api/agents/${agent}/media?p=${encodeURIComponent(p)}${dl ? '&dl=1' : ''}`;
+function mediaView(agent, list) {
+  if (!list || !list.length) return '';
+  return `<div class="media">${list.map((f) => {
+    const u = mediaUrl(agent, f.path);
+    const el = f.kind === 'image' ? `<img src="${u}" alt="${esc(f.name)}" data-open="${esc(u)}" loading="lazy">` : f.kind === 'video' ? `<video src="${u}" controls preload="metadata"></video>` : `<audio src="${u}" controls preload="metadata"></audio>`;
+    return `<figure>${el}<figcaption><span title="${esc(f.path)}">${esc(f.name)}</span><button data-save="${esc(f.path)}" data-agent="${esc(agent)}" type="button">Farklı kaydet…</button></figcaption></figure>`;
+  }).join('')}</div>`;
+}
+async function saveMediaAs(agent, p) {
+  const name = p.split(/[\\/]/).pop();
+  const u = mediaUrl(agent, p, true);
+  if (window.showSaveFilePicker) {
+    try {
+      const ext = (name.match(/\.[^.]+$/) || [''])[0];
+      const h = await showSaveFilePicker({ suggestedName: name, types: ext ? [{ description: ext.slice(1).toUpperCase() + ' dosyası', accept: { [MEDIA_TYPES[ext.toLowerCase()] || 'application/octet-stream']: [ext] } }] : undefined });
+      const r = await fetch(u); if (!r.ok) throw new Error('indirilemedi');
+      const w = await h.createWritable(); await r.body.pipeTo(w); return;
+    } catch (e) { if (e.name === 'AbortError') return; /* diğer hata: normal indirmeye düş */ }
+  }
+  const a = document.createElement('a'); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+}
+const MEDIA_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4' };
+document.addEventListener('click', (e) => {
+  const sv = e.target.closest('[data-save]'); if (sv) { saveMediaAs(sv.dataset.agent, sv.dataset.save); return; }
+  const im = e.target.closest('img[data-open]'); if (im) window.open(im.dataset.open, '_blank');
+});
+
+// ── ekler (resim / belge) ──
+const fileUrl = (agent, p) => `/api/agents/${agent}/file?p=${encodeURIComponent(p)}`;
+const fmtSize = (n) => (n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB');
+const fileIcon = (n) => (/\.pdf$/i.test(n) ? '📕' : /\.(docx?|odt|rtf)$/i.test(n) ? '📘' : /\.(xlsx?|csv|ods)$/i.test(n) ? '📗' : /\.(pptx?|odp)$/i.test(n) ? '📙' : /\.(zip|rar|7z|tar|gz)$/i.test(n) ? '🗜️' : '📄');
+function fileView(agent, f) {
+  const u = fileUrl(agent, f.path);
+  return f.image ? `<a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="${esc(f.name)}"></a>` : `<a href="${u}" target="_blank" rel="noopener" download="${esc(f.name)}">${fileIcon(f.name)} ${esc(f.name)}</a>`;
+}
+function renderAtt() {
+  const box = $('#attach'); const list = S.att.filter((f) => f.agent === S.cur);
+  box.hidden = !list.length;
+  box.innerHTML = list.map((f) => `<div class="att ${f.up ? 'up' : ''}">${f.image ? `<img src="${f.prev || fileUrl(f.agent, f.path)}" alt="" data-zoom="${f.key}">` : `<span class="ic">${fileIcon(f.name)}</span>`}<span class="nm">${esc(f.name)}<small>${f.up ? 'yükleniyor…' : fmtSize(f.size)}</small></span><button class="x" data-rm="${f.key}" title="Kaldır" type="button">×</button></div>`).join('');
+}
+$('#attach').onclick = (e) => {
+  const rm = e.target.closest('[data-rm]');
+  if (rm) {
+    const i = S.att.findIndex((f) => f.key === rm.dataset.rm); if (i < 0) return;
+    const [f] = S.att.splice(i, 1); if (f.prev) URL.revokeObjectURL(f.prev); renderAtt();
+    if (f.path) api(`/agents/${f.agent}/file?p=${encodeURIComponent(f.path)}`, 'DELETE').catch(() => {});
+    return;
+  }
+  const z = e.target.closest('[data-zoom]');
+  if (z) { const f = S.att.find((x) => x.key === z.dataset.zoom); if (f && f.path) window.open(fileUrl(f.agent, f.path), '_blank'); }
+};
+async function addFiles(files) {
+  const a = cur(); if (!a) return;
+  for (const file of files) {
+    const isImg = /^image\//.test(file.type);
+    const name = file.name && file.name !== 'image.png' ? file.name : (isImg ? `pano-${Date.now()}.${(file.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}` : file.name || 'dosya');
+    const it = { key: Math.random().toString(36).slice(2), agent: a.id, name, size: file.size, image: isImg, up: true, prev: isImg ? URL.createObjectURL(file) : '' };
+    S.att.push(it); renderAtt();
+    try {
+      const r = await fetch(`/api/agents/${a.id}/upload?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'X-Hub': '1', 'Content-Type': 'application/octet-stream' }, body: file });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      Object.assign(it, { path: j.path, image: j.image, up: false });
+    } catch (e) { S.att = S.att.filter((x) => x !== it); alert(`${name}: ${e.message}`); }
+    renderAtt();
+  }
+}
+$('#btnAttach').onclick = () => $('#fileIn').click();
+$('#fileIn').onchange = (e) => { addFiles([...e.target.files]); e.target.value = ''; $('#input').focus(); };
+const comp = $('#composer');
+comp.ondragover = (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); comp.classList.add('drag'); } };
+comp.ondragleave = (e) => { if (!comp.contains(e.relatedTarget)) comp.classList.remove('drag'); };
+comp.ondrop = (e) => { comp.classList.remove('drag'); if (e.dataTransfer?.files?.length) { e.preventDefault(); addFiles([...e.dataTransfer.files]); } };
+
 // ── giriş kutusu ──
 const inp = $('#input');
 const grow = () => { inp.style.height = 'auto'; inp.style.height = Math.min(inp.scrollHeight, 220) + 'px'; };
@@ -220,6 +301,7 @@ function renderSlash() {
 }
 $('#slashBox').onclick = (e) => { const d = e.target.closest('[data-cmd]'); if (d) { inp.value = '/' + d.dataset.cmd + ' '; renderSlash(); inp.focus(); } };
 inp.oninput = () => { grow(); renderSlash(); };
+inp.onpaste = (e) => { const fl = [...(e.clipboardData?.files || [])]; if (fl.length) { e.preventDefault(); addFiles(fl); } };
 inp.onkeydown = (e) => {
   const sm = slashMatches();
   if (sm.length && e.key === 'Tab') { e.preventDefault(); inp.value = '/' + sm[slashIdx][0] + ' '; renderSlash(); return; }
@@ -550,7 +632,7 @@ async function refresh(soft) {
   S.agents = r.agents; S.rate = r.rate || S.rate; S.running = new Set(r.running);
   if (S.cur && !cur()) S.cur = null;
   if (!S.cur && S.agents[0]) { return select(S.agents[0].id); }
-  renderSide(); renderTop();
+  renderSide(); renderTop(); renderAtt();
   if (!soft) { renderChat(false); renderCards(); if (S.tab) renderPanel(); }
 }
 connect();

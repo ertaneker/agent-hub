@@ -817,13 +817,14 @@ function handleEvent(p, line) {
       if (b.type === 'text' && b.text && b.text.trim()) {
         const key = `${mid}:${crypto.createHash('md5').update(b.text).digest('hex')}`;
         if (t.seen.has(key)) continue; t.seen.add(key);
-        t.text = b.text; addMsg(id, 'assistant', b.text); emit({ type: 'delta_end', agent: id });
+        t.text = b.text; { const ag = getAgent(id); const media = ag ? findMedia(ag, [b.text], t.media || (t.media = new Set())) : []; addMsg(id, 'assistant', b.text, media.length ? { media } : {}); } emit({ type: 'delta_end', agent: id });
       } else if (b.type === 'tool_use') {
         if (t.seen.has(b.id)) continue; t.seen.add(b.id);
         t.toolsUsed++;
         const inp = b.input || {};
         if (['Edit', 'Write', 'NotebookEdit'].includes(b.name) && (inp.file_path || inp.notebook_path)) t.edited.add(inp.file_path || inp.notebook_path);
         if (b.name === 'Bash' && /hubctl\.js["']?\s+done/.test(inp.command || '')) t.doneByAgent = true;
+        (t.toolIn || (t.toolIn = new Map())).set(b.id, collectStrings(inp));
         const line2 = summarizeTool(b.name, inp);
         addMsg(id, 'tool', line2, { tool: b.name, tool_id: b.id });
         progress(p, line2);
@@ -833,12 +834,54 @@ function handleEvent(p, line) {
     for (const b of ev.message.content) {
       if (b.type === 'tool_result') {
         const key = `r:${b.tool_use_id}`; if (t.seen.has(key)) continue; t.seen.add(key);
+        const blocks = Array.isArray(b.content) ? b.content : null;
         let tx = b.content; if (Array.isArray(tx)) tx = tx.map((x) => x.text || '').join('\n');
-        addMsg(id, 'tool_result', String(tx || '').slice(0, 1500), { is_error: !!b.is_error, tool_id: b.tool_use_id });
+        const ag = getAgent(id); const seenM = t.media || (t.media = new Set());
+        let media = [];
+        if (ag && !b.is_error) {
+          media = saveInlineImages(ag, blocks, seenM);
+          media.push(...findMedia(ag, [String(tx || ''), ...((t.toolIn && t.toolIn.get(b.tool_use_id)) || [])], seenM));
+        }
+        addMsg(id, 'tool_result', String(tx || '').slice(0, 1500), { is_error: !!b.is_error, tool_id: b.tool_use_id, ...(media.length ? { media: media.slice(0, 8) } : {}) });
       }
     }
   } else if (ev.type === 'result') onResult(p, ev);
   return undefined;
+}
+// ── agent'ın ürettiği medya (görsel / video / ses) ──
+const MEDIA_MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4' };
+const MEDIA_EXT = Object.keys(MEDIA_MIME).map((e) => e.slice(1)).join('|');
+const MEDIA_RES = [new RegExp(`[A-Za-z]:[\\\\/][^\\n"'\`<>|*?]*?\\.(?:${MEDIA_EXT})\\b`, 'gi'), new RegExp(`(?:^|[\\s"'\`(=])(\\/[^\\n"'\`<>|*?]*?\\.(?:${MEDIA_EXT}))\\b`, 'gi'), new RegExp(`["'\`]([^"'\`\\n]+?\\.(?:${MEDIA_EXT}))["'\`]`, 'gi'), new RegExp(`(?:^|[\\s(=])((?:\\.{1,2}[\\\\/])?[\\w.\\-]+(?:[\\\\/][\\w.\\- ]+)*\\.(?:${MEDIA_EXT}))\\b`, 'gi')];
+function collectStrings(v, out = []) { if (typeof v === 'string') out.push(v); else if (Array.isArray(v)) v.forEach((x) => collectStrings(x, out)); else if (v && typeof v === 'object') Object.values(v).forEach((x) => collectStrings(x, out)); return out; }
+// metinlerdeki var olan medya dosyalarını bulur; aynı dosya bir turda yalnızca bir kez döner
+function findMedia(a, texts, seen) {
+  const found = [];
+  for (const tx of texts) {
+    for (const re of MEDIA_RES) {
+      re.lastIndex = 0; let m;
+      while ((m = re.exec(tx))) {
+        const raw = (m[1] || m[0]).trim();
+        const f = path.resolve(path.isAbsolute(raw) ? raw : path.join(effCwd(a), raw));
+        if (seen.has(f)) continue;
+        try { if (!fs.statSync(f).isFile()) continue; } catch { continue; }
+        seen.add(f); found.push({ path: f, name: path.basename(f), kind: MEDIA_MIME[path.extname(f).toLowerCase()].split('/')[0] });
+      }
+    }
+  }
+  return found.slice(0, 8);
+}
+// MCP'nin base64 görsel döndürdüğü durum: dosyaya yaz
+function saveInlineImages(a, blocks, seen) {
+  const out = [];
+  for (const x of blocks || []) {
+    if (!x || x.type !== 'image' || !x.source || x.source.type !== 'base64') continue;
+    const ext = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif' }[x.source.media_type] || '.png';
+    const dir = path.join(effCwd(a), '.hub-uploads'); fs.mkdirSync(dir, { recursive: true });
+    const f = path.join(dir, `uretilen-${Date.now().toString(36)}-${out.length}${ext}`);
+    fs.writeFileSync(f, Buffer.from(x.source.data, 'base64')); seen.add(f);
+    out.push({ path: f, name: path.basename(f), kind: 'image' });
+  }
+  return out;
 }
 function onSystem(p, ev) {
   const id = p.agentId;
@@ -1477,20 +1520,65 @@ async function api(req, res, u) {
     const rows = q.all('SELECT * FROM messages WHERE agent_id=? AND id<? ORDER BY id DESC LIMIT ?', mm[1], before, lim).reverse().map((r) => ({ ...r, meta: J(r.meta, {}) }));
     return send(res, 200, { messages: rows, more: rows.length === lim, running: isBusy(mm[1]) });
   }
+  if ((mm = p.match(/^\/api\/agents\/([\w-]+)\/upload$/)) && m === 'POST') {
+    const a = getAgent(mm[1]); if (!a) return send(res, 404, {});
+    const raw = String(u.searchParams.get('name') || 'dosya').replace(/[\/:*?"<>|\x00-\x1f]/g, '_').slice(-80) || 'dosya';
+    const dir = path.join(effCwd(a), '.hub-uploads'); fs.mkdirSync(dir, { recursive: true });
+    const ext = path.extname(raw); const base = path.basename(raw, ext).slice(0, 60) || 'dosya';
+    const file = path.join(dir, `${Date.now().toString(36)}-${base}${ext}`);
+    const chunks = []; let size = 0;
+    for await (const c of req) { size += c.length; if (size > 25e6) { req.destroy(); return send(res, 413, { error: 'dosya 25 MB üstü' }); } chunks.push(c); }
+    fs.writeFileSync(file, Buffer.concat(chunks));
+    return send(res, 200, { path: file, name: raw, size, image: /\.(png|jpe?g|gif|webp|bmp)$/i.test(ext) });
+  }
+  if ((mm = p.match(/^\/api\/agents\/([\w-]+)\/media$/)) && m === 'GET') {
+    const a = getAgent(mm[1]); if (!a) return send(res, 404, {});
+    const f = path.resolve(String(u.searchParams.get('p') || '')); const mime = MEDIA_MIME[path.extname(f).toLowerCase()];
+    const known = mime && q.all('SELECT meta FROM messages WHERE agent_id=? AND meta LIKE ?', a.id, '%' + JSON.stringify(f).slice(1, -1).replace(/[%_]/g, '') + '%').some((r) => (J(r.meta, {}).media || []).some((x) => x.path === f));
+    let st; try { st = known && fs.statSync(f); } catch { st = null; }
+    if (!st || !st.isFile()) return send(res, 404, { error: 'yok' });
+    const hdr = { 'Content-Type': mime, 'Accept-Ranges': 'bytes', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'", 'Cache-Control': 'no-cache' };
+    if (u.searchParams.get('dl')) hdr['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(f))}`;
+    const rg = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    if (rg && (rg[1] || rg[2])) {
+      let s0 = rg[1] ? Number(rg[1]) : Math.max(0, st.size - Number(rg[2])); let e0 = rg[1] && rg[2] ? Number(rg[2]) : st.size - 1; e0 = Math.min(e0, st.size - 1);
+      if (s0 > e0) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end(); }
+      res.writeHead(206, { ...hdr, 'Content-Range': `bytes ${s0}-${e0}/${st.size}`, 'Content-Length': e0 - s0 + 1 });
+      return fs.createReadStream(f, { start: s0, end: e0 }).pipe(res);
+    }
+    res.writeHead(200, { ...hdr, 'Content-Length': st.size });
+    return fs.createReadStream(f).pipe(res);
+  }
+  if ((mm = p.match(/^\/api\/agents\/([\w-]+)\/file$/)) && m === 'DELETE') {
+    const a = getAgent(mm[1]); if (!a) return send(res, 404, {});
+    const dir = path.resolve(effCwd(a), '.hub-uploads'); const f = path.resolve(String(u.searchParams.get('p') || ''));
+    if (f.startsWith(dir + path.sep)) { try { fs.unlinkSync(f); } catch { /* zaten yok */ } }
+    return send(res, 200, { ok: true });
+  }
+  if ((mm = p.match(/^\/api\/agents\/([\w-]+)\/file$/)) && m === 'GET') {
+    const a = getAgent(mm[1]); if (!a) return send(res, 404, {});
+    const dir = path.resolve(effCwd(a), '.hub-uploads'); const f = path.resolve(String(u.searchParams.get('p') || ''));
+    if (!f.startsWith(dir + path.sep) || !fs.existsSync(f)) return send(res, 404, { error: 'yok' });
+    const img = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp' }[path.extname(f).toLowerCase()];
+    res.writeHead(200, { 'Content-Type': img || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': img ? 'inline' : 'attachment' });
+    return fs.createReadStream(f).pipe(res);
+  }
   if ((mm = p.match(/^\/api\/agents\/([\w-]+)\/send$/)) && m === 'POST') {
     const id = mm[1]; const a = getAgent(id); if (!a) return send(res, 404, {});
-    const b = await readBody(req); const text = String(b.text || '').trim(); if (!text) return send(res, 400, { error: 'boş mesaj' });
+    const b = await readBody(req); const text = String(b.text || '').trim(); const hasFiles = Array.isArray(b.files) && b.files.length; if (!text && !hasFiles) return send(res, 400, { error: 'boş mesaj' });
     let extra = {};
     if (b.decision && b.decision.mode === 'reuse') {
       const bd = q.get('SELECT * FROM board WHERE id=?', b.decision.board_id);
       if (bd) { extra = { reuse: { ...bd, agent_name: (q.get('SELECT name FROM agents WHERE id=?', bd.agent_id) || {}).name } }; decide(id, 'yeniden-kullan', `"${bd.title}" (#${bd.id}) işi alınacak`); }
     } else if (b.decision && b.decision.mode === 'rebuild') { extra = { rebuild: true }; decide(id, 'yeniden-insa', `Benzer iş biliniyor, sıfırdan yapılacak: ${text.slice(0, 80)}`); }
-    else if (!b.decision && text.length > 25 && !text.startsWith('/')) {
+    else if (!b.decision && !hasFiles && text.length > 25 && !text.startsWith('/')) {
       const sim = findSimilar(id, text);
       if (sim.length) return send(res, 200, { similar: sim });
     }
-    addMsg(id, 'user', text);
-    enqueue(id, text, 'user', 0, extra);
+    const files = (Array.isArray(b.files) ? b.files : []).slice(0, 10).map((f) => ({ path: String(f.path || ''), name: String(f.name || ''), image: !!f.image })).filter((f) => f.path);
+    const note = files.length ? `\n\n[Ekli dosyalar — Read aracıyla oku]\n${files.map((f) => f.path).join('\n')}` : '';
+    addMsg(id, 'user', text, files.length ? { files } : {});
+    enqueue(id, text + note, 'user', 0, extra);
     return send(res, 200, { ok: true, busy: isBusy(id) });
   }
   if ((mm = p.match(/^\/api\/agents\/([\w-]+)\/mode$/)) && m === 'POST') { const b = await readBody(req); await setAgentMode(mm[1], b.mode || 'auto'); return send(res, 200, { ok: true }); }
@@ -1625,6 +1713,20 @@ server.listen(PORT, '127.0.0.1', () => {
   seedProviders();
   for (const a of q.all("SELECT * FROM agents WHERE tg_token<>''").map(agentRow)) startAgentBot(a);
   console.log(`Agent Hub UI: http://localhost:${PORT}  (veri: ${DATA}, claude: ${CLAUDE})`);
+  // eski mesajlardaki medyayı bir kez geriye dönük işaretle (sohbette görünsün)
+  if (!kvGet('media_backfill', false)) {
+    try {
+      for (const a of q.all('SELECT * FROM agents')) {
+        const seen = new Set();
+        for (const r of q.all("SELECT id,role,text,meta FROM messages WHERE agent_id=? AND role IN ('assistant','tool_result') ORDER BY id DESC LIMIT 300", a.id).reverse()) {
+          const meta = J(r.meta, {}); if (meta.media) continue;
+          const media = findMedia(a, [String(r.text || '')], seen); if (!media.length) continue;
+          q.run('UPDATE messages SET meta=? WHERE id=?', JSON.stringify({ ...meta, media }), r.id);
+        }
+      }
+    } catch (e) { console.error('medya geri doldurma', e); }
+    kvSet('media_backfill', true);
+  }
   recover();
 });
 process.on('SIGINT', () => { for (const p of procs.values()) { try { p.child.kill(); } catch { /* */ } } process.exit(0); });

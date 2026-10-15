@@ -140,3 +140,30 @@ code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:.92em}
   #side{display:none}
   #panel{position:fixed;inset:0;z-index:5}
 }
+
+/* ekler */
+.attach{display:flex;flex-wrap:wrap;gap:8px;max-width:960px;margin-bottom:8px}
+.att{position:relative;display:flex;align-items:center;gap:8px;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:6px 8px;max-width:240px;font-size:12px}
+.att img{width:56px;height:56px;object-fit:cover;border-radius:6px;cursor:zoom-in}
+.att .ic{font-size:26px}
+.att .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.att .nm small{display:block;color:var(--faint)}
+.att.up{opacity:.6}
+.att .x{position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;border:1px solid var(--line);background:var(--bg);color:var(--fg);font-size:13px;line-height:1;padding:0;cursor:pointer}
+.att .x:hover{background:#c0392b;color:#fff}
+#btnAttach{background:none;border:0;font-size:18px;cursor:pointer;padding:0 2px;color:var(--dim)}
+#composer.drag .prompt-row{border-color:var(--acc);border-style:dashed}
+.m.user .files{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.m.user .files img{max-width:200px;max-height:150px;border-radius:6px;cursor:zoom-in}
+.m.user .files a{color:inherit;border:1px solid var(--line);border-radius:6px;padding:3px 7px;font-size:12px;text-decoration:none}
+
+/* üretilen medya */
+.media{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.media figure{margin:0;display:inline-flex;flex-direction:column;gap:4px;max-width:min(560px,100%)}
+.media img,.media video{max-width:100%;max-height:420px;border-radius:8px;border:1px solid var(--line);background:#000}
+.media img{cursor:zoom-in;background:var(--bg2)}
+.media audio{width:100%}
+.media figcaption{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--dim)}
+.media figcaption span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.media figcaption button,.media figcaption a{background:var(--bg2);border:1px solid var(--line);border-radius:6px;color:var(--fg);padding:2px 8px;font-size:12px;cursor:pointer;text-decoration:none;white-space:nowrap}
+.media figcaption button:hover,.media figcaption a:hover{border-color:var(--acc)}

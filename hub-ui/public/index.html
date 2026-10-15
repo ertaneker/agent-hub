@@ -44,8 +44,10 @@
     <div id="cards"></div>
     <div id="slashBox" hidden></div>
     <footer id="composer">
+      <div id="attach" class="attach" hidden></div>
       <div class="prompt-row">
-        <span class="caret">&gt;</span>
+        <button id="btnAttach" title="Resim veya belge ekle (ya da panodan yapıştır / sürükle)" type="button">📎</button>
+        <input type="file" id="fileIn" multiple hidden>
         <textarea id="input" rows="1" placeholder="Mesaj yaz… (Enter gönder, Shift+Enter yeni satır, Esc durdur)" autofocus></textarea>
         <button id="btnSend" title="Gönder">↵</button>
       </div>

@@ -40,3 +40,6 @@ tmp/
 .DS_Store
 Thumbs.db
 hub-ui/import-legacy.js
+
+# Hub ek dosyaları (resim/belge)
+.hub-uploads/
