@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Hub</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23d97757'/%3E%3Cpath d='M9 21l5-5-5-5M16 22h7' stroke='%23fff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <div class="brand"><span class="logo">&gt;_</span> Agent Hub</div>
+    <div class="side-label">AGENT'LAR</div>
+    <div id="agentList"></div>
+    <button id="btnNew" class="new">+ Yeni agent</button>
+    <button id="btnProv" class="new" style="margin-top:0">🔁 Model sağlayıcıları</button>
+    <div class="side-foot" id="sideFoot"></div>
+  </aside>
+
+  <main id="main">
+    <header id="top">
+      <div id="topInfo"></div>
+      <div class="top-actions">
+        <span id="bgBadge" class="bg" hidden></span>
+        <select id="selMode" class="sel" title="İzin modu (Claude Code'daki Shift+Tab gibi)">
+          <option value="auto">Mod: otomatik</option><option value="default">Normal (sorar)</option>
+          <option value="acceptEdits">Düzenlemeyi kabul et</option><option value="plan">Plan modu</option>
+          <option value="bypassPermissions">Serbest (sormaz)</option></select>
+        <select id="selModel" class="sel" title="Model"><option>sonnet</option><option>opus</option><option>haiku</option></select>
+        <button id="btnStop" class="danger" hidden title="Çalışan işi keser; agent ve oturumu yaşar (Esc)">■ Kes</button>
+        <div class="tabs" id="panelTabs">
+          <button data-tab="brain">Beyin</button>
+          <button data-tab="limits">Sınırlar</button>
+          <button data-tab="env">Ortam</button>
+          <button data-tab="quota">Limitler</button>
+          <button data-tab="sched">Zamanlama</button>
+          <button data-tab="feed">Ortak akış</button>
+          <button data-tab="settings">Ayarlar</button>
+        </div>
+      </div>
+    </header>
+    <section id="chat" aria-live="polite"></section>
+    <div id="cards"></div>
+    <div id="slashBox" hidden></div>
+    <footer id="composer">
+      <div class="prompt-row">
+        <span class="caret">&gt;</span>
+        <textarea id="input" rows="1" placeholder="Mesaj yaz… (Enter gönder, Shift+Enter yeni satır, Esc durdur)" autofocus></textarea>
+        <button id="btnSend" title="Gönder">↵</button>
+      </div>
+      <div class="hint" id="hint">Kısayollar: <code>/durdur</code> <code>/beyin</code> <code>/sinir</code> <code>/akis</code> <code>/gonder agent mesaj</code></div>
+    </footer>
+  </main>
+
+  <aside id="panel" hidden>
+    <button id="panelClose" class="x" aria-label="Kapat">×</button>
+    <div id="panelBody"></div>
+  </aside>
+</div>
+<div id="modal" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

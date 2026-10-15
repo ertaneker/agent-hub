@@ -1,0 +1,34 @@
+# ~/.agent-hub/profiles.sh
+# Her profil, claude'un hangi hesapla ya da modelle çalışacağını tanımlar.
+# Buradaki ayarlar, terminalde kullandığın komutların yaptığıyla AYNI olmalı.
+# Kendi komutlarına bakmak için:  type claude   type claudeis   type deepseek
+#
+# Profil adları: kisisel | is | deepseek  (istersen yenilerini ekleyebilirsin)
+
+profile_env() {
+  # Önceki profilden kalan ayarları temizle
+  unset CLAUDE_CONFIG_DIR ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN \
+        ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL
+
+  case "$1" in
+    kisisel)
+      # Kişisel hesap: claude'un varsayılan ayar klasörü (~/.claude)
+      : ;;
+    is)
+      # Kurum hesabı. 'claudeis' komutun hangi klasörü kullanıyorsa onu yaz.
+      export CLAUDE_CONFIG_DIR="$HOME/.claude-is" ;;
+    deepseek)
+      # 'deepseek' komutundaki değerlerle aynı olmalı
+      export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+      export ANTHROPIC_AUTH_TOKEN="${DEEPSEEK_API_KEY:-BURAYA_DEEPSEEK_ANAHTARI}"
+      unset ANTHROPIC_API_KEY
+      export ANTHROPIC_MODEL="deepseek-chat"
+      export ANTHROPIC_SMALL_FAST_MODEL="deepseek-chat" ;;
+    *)
+      echo "bilinmeyen profil: $1 (kisisel | is | deepseek)" >&2
+      return 1 ;;
+  esac
+}
+
+# Bilinen profiller (Telegram yardım mesajında listelenir)
+PROFILES="kisisel is deepseek"

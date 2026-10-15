@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Kalıcı orkestratör agent'ı
+#
+#   agent [profil] [klasör]     Açık agent varsa ona bağlan; yoksa bu profille başlat
+#                               (profil verilmezse: kisisel)
+#   agent hesap <profil>        Agent'ı başka hesaba/modele taşı: kisisel | is | deepseek
+#   agent isci <profil|serbest> Tüm işçileri tek profile kilitle ya da serbest bırak
+#   agent yenile                Aynı profille yeniden başlat (yeni MCP'ler böyle yüklenir)
+#   agent durum                 Profil, işçi ayarı ve görevler
+#   agent tg                    Telegram köprüsünü (yeniden) başlat
+#   agent kapat                 Agent'ı ve Telegram köprüsünü kapat
+#
+# Agent'tan ayrılmak için: Ctrl-b sonra d (ya da terminali kapat). Agent çalışmaya devam eder.
+set -uo pipefail
+HUB="${AGENT_HUB:-$HOME/.agent-hub}"
+BIN="$HUB/bin"
+SESSION="agent-hub"
+# shellcheck source=/dev/null
+source "$HUB/profiles.sh"
+
+state_get() { grep "^$1=" "$HUB/state" 2>/dev/null | tail -1 | cut -d= -f2-; }
+state_set() {
+  touch "$HUB/state"
+  { grep -v "^$1=" "$HUB/state"; echo "$1=$2"; } > "$HUB/state.tmp" && mv "$HUB/state.tmp" "$HUB/state"
+}
+journal() { echo "- $(date '+%F %T') $*" >> "$HUB/journal.md"; }
+need_tmux() {
+  command -v tmux >/dev/null || { echo "tmux gerekli (macOS: brew install tmux, Linux/WSL: sudo apt install tmux)"; exit 1; }
+}
+running() { tmux has-session -t "$SESSION" 2>/dev/null; }
+valid_profile() { ( profile_env "$1" ) >/dev/null || exit 1; }
+
+start_tg() {
+  [ -f "$HUB/telegram.env" ] || return 0
+  tmux kill-window -t "$SESSION:tg" 2>/dev/null
+  tmux new-window -d -t "$SESSION" -n tg "python3 '$BIN/tg_bridge.py'; echo 'Köprü durdu: agent tg'; exec \${SHELL:-bash}"
+}
+
+start() {
+  local p="$1" dir="$2"
+  valid_profile "$p"
+  state_set BRAIN_PROFILE "$p"
+  state_set PROJECT_DIR "$dir"
+  [ "$p" != deepseek ] && state_set WORKER_ACCOUNT "$p"
+  [ -z "$(state_get WORKER_ACCOUNT)" ] && state_set WORKER_ACCOUNT kisisel
+  journal "agent başlatıldı: profil=$p klasör=$dir"
+  tmux new-session -d -s "$SESSION" -n brain -c "$dir" "'$BIN/brain.sh' '$p'"
+  start_tg
+}
+
+# Beyni yeni profille yeniden başlatır. tmux sunucusu üzerinden, birkaç saniye
+# gecikmeyle çalışır; böylece agent bu komutu kendi içinden de çağırabilir.
+respawn() {
+  local p="$1" dir
+  dir="$(state_get PROJECT_DIR)"; dir="${dir:-$HOME}"
+  cat > "$HUB/.respawn.sh" <<EOF
+sleep 3
+tmux respawn-pane -k -t '$SESSION:brain' -c '$dir' "'$BIN/brain.sh' '$p'"
+EOF
+  tmux run-shell -b "bash '$HUB/.respawn.sh'"
+}
+
+attach() {
+  if [ -n "${TMUX:-}" ]; then tmux switch-client -t "$SESSION:brain"
+  else exec tmux attach -t "$SESSION:brain"; fi
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  hesap)
+    p="${2:?kullanım: agent hesap <kisisel|is|deepseek>}"
+    valid_profile "$p"
+    running || { echo "Çalışan agent yok. Başlatmak için: agent $p <klasör>"; exit 1; }
+    state_set BRAIN_PROFILE "$p"
+    [ "$p" != deepseek ] && state_set WORKER_ACCOUNT "$p"
+    journal "hesap değişti -> $p"
+    respawn "$p"
+    echo "Agent birkaç saniye içinde '$p' profiliyle yeniden başlayacak ve plan.md'den devam edecek."
+    ;;
+  isci)
+    p="${2:?kullanım: agent isci <profil|serbest>}"
+    if [ "$p" = serbest ]; then
+      state_set WORKER_FORCE ""; journal "işçiler serbest"; echo "İşçi modeli seçimi orkestratörde."
+    else
+      valid_profile "$p"; state_set WORKER_FORCE "$p"; journal "tüm işçiler -> $p"
+      echo "Bundan sonraki tüm işçiler '$p' ile çalışacak."
+    fi
+    ;;
+  yenile)
+    running || { echo "Çalışan agent yok."; exit 1; }
+    p="$(state_get BRAIN_PROFILE)"; journal "agent yenilendi ($p)"
+    respawn "$p"; echo "Agent '$p' ile yeniden başlıyor."
+    ;;
+  durum)
+    if running; then echo "Agent: çalışıyor"; else echo "Agent: kapalı"; fi
+    echo "Beyin profili : $(state_get BRAIN_PROFILE)"
+    echo "İşçi hesabı   : $(state_get WORKER_ACCOUNT)"
+    f="$(state_get WORKER_FORCE)"; echo "İşçi kilidi   : ${f:-serbest}"
+    echo "Proje klasörü : $(state_get PROJECT_DIR)"
+    echo
+    "$BIN/hub.sh" status
+    ;;
+  tg)    need_tmux; running || { echo "Önce agent'ı başlat."; exit 1; }; start_tg; echo "Telegram köprüsü başlatıldı." ;;
+  kapat) tmux kill-session -t "$SESSION" 2>/dev/null && { journal "agent kapatıldı"; echo "Agent kapatıldı."; } || echo "Açık agent yok." ;;
+  -h|--help|yardim) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)
+    need_tmux
+    if running; then
+      [ $# -gt 0 ] && echo "Agent zaten '$(state_get BRAIN_PROFILE)' ile çalışıyor; ona bağlanılıyor. Hesap değiştirmek için: agent hesap <profil>" && sleep 2
+      attach
+    fi
+    p="kisisel"; dir="$PWD"
+    if [ $# -ge 1 ]; then
+      if [ -d "$1" ] && [ $# -eq 1 ]; then dir="$1"; else p="$1"; dir="${2:-$PWD}"; fi
+    fi
+    [ -d "$dir" ] || { echo "Klasör yok: $dir"; exit 1; }
+    start "$p" "$(cd "$dir" && pwd)"
+    attach
+    ;;
+esac

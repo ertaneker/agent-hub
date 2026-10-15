@@ -1,0 +1,8 @@
+# .NET SDK'lı sürüm (derleme/test kapısı için). Derlemek için:
+#   docker build -t agent-hub-sandbox:dotnet -f Dockerfile.dotnet .
+FROM agent-hub-sandbox:1
+USER root
+RUN curl -sSL https://dot.net/v1/dotnet-install.sh -o /tmp/di.sh && bash /tmp/di.sh --channel 8.0 --install-dir /usr/share/dotnet \
+    && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet && rm /tmp/di.sh
+USER node
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1

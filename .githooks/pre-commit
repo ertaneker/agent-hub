@@ -1,0 +1,3 @@
+#!/bin/sh
+# commit öncesi gizli anahtar taraması (kur.bat bu klasörü core.hooksPath olarak ayarlar)
+exec node "$(git rev-parse --show-toplevel)/scripts/check-secrets.js"

@@ -1,0 +1,42 @@
+# --- GİZLİ ANAHTARLAR / KİŞİSEL VERİ: ASLA GITHUB'A GİTMEZ ---
+# Hub verisi (sohbetler, API anahtarları, Telegram token'ları) ev klasöründe ~/.agent-hub-ui içinde durur; depoda tutulmaz.
+.env
+.env.*
+!.env.example
+*.env
+!*.env.example
+telegram.env
+profiles.sh
+*.key
+*.pem
+*.pfx
+*.db
+*.db-shm
+*.db-wal
+*.sqlite*
+data/
+hub-data/
+state
+journal.md
+plan.md
+.credentials.json
+.claude.json*
+.claude/
+.mcp.json
+
+# Tarayıcı otomasyon çıktıları (ekranda token görünebilir) ve ekran görüntüleri
+.playwright-mcp/
+*.log
+Ekran g*.png
+channel-art/
+
+# Üretilen / geçici
+node_modules/
+__pycache__/
+*.pyc
+$TMPDIR/
+tmp/
+*.tmp
+.DS_Store
+Thumbs.db
+hub-ui/import-legacy.js
