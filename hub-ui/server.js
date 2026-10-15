@@ -395,7 +395,7 @@ function skillDescs(cfgDir) {
   } catch { /* eklenti yok */ }
   skillCache = { at: Date.now(), dir: cfgDir, map }; return map;
 }
-const enrichSlash = (a) => { const map = skillDescs(a.config_dir || sandbox.homeCfg()); return J(a.slash, []).map((x) => { const n = typeof x === 'string' ? x : x.n; return { n, d: (x && x.d) || map[n] || map[n.split(':').pop()] || '' }; }); };
+const enrichSlash = (a) => { const map = skillDescs(a.config_dir || sandbox.homeCfg()); const stored = J(a.slash, []); return (stored.length ? stored : Object.keys(map)).map((x) => { const n = typeof x === 'string' ? x : x.n; return { n, d: (x && x.d) || map[n] || map[n.split(':').pop()] || '' }; }); };
 
 // ───────────────────────── benzerlik (daha önce yapıldı mı?) ─────────────────────────
 const STOP = new Set(('ve ile bir bu şu icin için gibi daha çok ama veya olan olarak yap yapalım istiyorum lazım olsun ' +
@@ -817,7 +817,7 @@ function handleEvent(p, line) {
       if (b.type === 'text' && b.text && b.text.trim()) {
         const key = `${mid}:${crypto.createHash('md5').update(b.text).digest('hex')}`;
         if (t.seen.has(key)) continue; t.seen.add(key);
-        t.text = b.text; { const ag = getAgent(id); const media = ag ? findMedia(ag, [b.text], t.media || (t.media = new Set())) : []; addMsg(id, 'assistant', b.text, media.length ? { media } : {}); } emit({ type: 'delta_end', agent: id });
+        t.text = b.text; { const ag = getAgent(id); const media = ag ? findMedia(ag, [b.text], t.media || (t.media = new Set())) : []; addMsg(id, 'assistant', b.text, media.length ? { media } : {}); mirrorMediaToTelegram(id, media); } emit({ type: 'delta_end', agent: id });
       } else if (b.type === 'tool_use') {
         if (t.seen.has(b.id)) continue; t.seen.add(b.id);
         t.toolsUsed++;
@@ -843,6 +843,7 @@ function handleEvent(p, line) {
           media.push(...findMedia(ag, [String(tx || ''), ...((t.toolIn && t.toolIn.get(b.tool_use_id)) || [])], seenM));
         }
         addMsg(id, 'tool_result', String(tx || '').slice(0, 1500), { is_error: !!b.is_error, tool_id: b.tool_use_id, ...(media.length ? { media: media.slice(0, 8) } : {}) });
+        mirrorMediaToTelegram(id, media);
       }
     }
   } else if (ev.type === 'result') onResult(p, ev);
@@ -887,7 +888,12 @@ function onSystem(p, ev) {
   const id = p.agentId;
   if (ev.subtype === 'init') {
     if (ev.session_id && !p.oneShot) q.run(`UPDATE agents SET ${p.prov ? 'fb_session' : 'session_id'}=? WHERE id=?`, ev.session_id, id);
-    if (Array.isArray(ev.slash_commands) && !p.oneShot && (q.get('SELECT slash FROM agents WHERE id=?', id) || {}).slash === '[]') { q.run('UPDATE agents SET slash=? WHERE id=?', JSON.stringify(ev.slash_commands.map((n) => ({ n }))), id); emit({ type: 'agents' }); }
+    if (Array.isArray(ev.slash_commands) && !p.oneShot && !p.prov) {
+      const old = J((q.get('SELECT slash FROM agents WHERE id=?', id) || {}).slash, []).map((x) => (typeof x === 'string' ? { n: x } : x));
+      const byName = new Map(old.map((x) => [x.n, x]));
+      const next = ev.slash_commands.map((n) => byName.get(n) || { n });
+      if (JSON.stringify(next) !== JSON.stringify(old)) { q.run('UPDATE agents SET slash=? WHERE id=?', JSON.stringify(next), id); emit({ type: 'agents' }); }
+    }
     startTurn(p);
   } else if (ev.subtype === 'commands_changed' && Array.isArray(ev.commands) && !p.oneShot) {
     const rich = ev.commands.map((c) => ({ n: c.name, d: String(c.description || '').slice(0, 160), h: c.argumentHint || '' }));
@@ -966,6 +972,31 @@ function resolveApproval(id, action, extra = {}) {
 }
 const openQuestion = (agentId) => q.get("SELECT * FROM approvals WHERE agent_id=? AND kind='question' AND status='open' ORDER BY id LIMIT 1", agentId);
 // Telegram/arayüzden gelen düz yazı: açık soru varsa onun cevabıdır, yoksa agent'a mesajdır
+// Telegram'a yansıtılan dosyalar tekrar gönderilmesin (Telegram'dan gelen / hub'dan eklenen)
+const tgNoEcho = new Set();
+const attachNote = (files) => (files.length ? `\n\n[Ekli dosyalar — Read aracıyla oku]\n${files.map((f) => f.path).join('\n')}` : '');
+function mirrorMediaToTelegram(agentId, media) {
+  const T = tgFor(agentId); if (!T.enabled || !T.mirrorFile) return;
+  for (const f of media || []) { if (tgNoEcho.has(f.path)) continue; tgNoEcho.add(f.path); T.mirrorFile(f.path, f.name); }
+}
+// Telegram'dan gelen foto/belge/video: diske kaydet, agent'a ekli dosya olarak ilet
+async function tgMedia(agentId, m, download) {
+  const a = getAgent(agentId); if (!a) return;
+  const dir = path.join(effCwd(a), '.hub-uploads'); fs.mkdirSync(dir, { recursive: true });
+  const files = [];
+  for (const f of m.files.slice(0, 10)) {
+    const { buf, name } = await download(f.file_id);
+    const nm = String(f.name || name).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(-80);
+    const ext = path.extname(nm); const file = path.join(dir, `${Date.now().toString(36)}-${path.basename(nm, ext).slice(0, 60)}${ext}`);
+    fs.writeFileSync(file, buf); tgNoEcho.add(file);
+    files.push({ path: file, name: nm, image: /\.(png|jpe?g|gif|webp|bmp)$/i.test(ext) });
+  }
+  const text = (m.caption || '').trim();
+  const oq = openQuestion(agentId);
+  if (oq && text) { answerQuestion(oq, null, text); return; }
+  addMsg(agentId, 'user', text ? `📱 ${text}` : '📱', { files });
+  enqueue(agentId, (text || 'Ekteki dosyayı incele.') + attachNote(files), 'user');
+}
 function userMessage(agentId, text, via) {
   const oq = openQuestion(agentId);
   if (oq) { answerQuestion(oq, null, text); return; }
@@ -1226,6 +1257,7 @@ const tg = tgLib({ dir: DATA, h: {
   stop: (id) => stopAgent(id),
   approve: (id, action) => resolveApproval(id, action) || 'Bu izin kartı yok ya da zaten cevaplanmış.',
   userText: (id, text) => userMessage(id, text, '📱'),
+  media: (id, m, dl) => tgMedia(id, m, dl),
   callback: (data) => handleCallback(data),
   agentCmd: (id, t) => agentCmd(id, t),
   status: (id) => agentStatusText(id),
@@ -1266,8 +1298,8 @@ async function handleAgentBotText(agentId, text) {
 function startAgentBot(a) {
   if (!a.tg_token || !tg.enabled || agentBots.has(a.id)) return;
   if (a.tg_token === tg.token) { q.run("UPDATE agents SET tg_token='', tg_username='', tg_bot_id='' WHERE id=?", a.id); return; } // ana bot token'ı agent'a bağlanamaz
-  const conn = tgLib.connect({ token: a.tg_token, chat: tg.chat, offsetFile: path.join(DATA, `tg-${a.id}.json`), onText: (t) => handleAgentBotText(a.id, t), onCallback: (d) => handleCallback(d) });
-  agentBots.set(a.id, { ...conn, enabled: true, mirror: (t) => conn.send(t) });
+  const conn = tgLib.connect({ token: a.tg_token, chat: tg.chat, offsetFile: path.join(DATA, `tg-${a.id}.json`), onText: (t) => handleAgentBotText(a.id, t), onMedia: (m, dl) => tgMedia(a.id, m, dl), onCallback: (d) => handleCallback(d) });
+  agentBots.set(a.id, { ...conn, enabled: true, mirror: (t) => conn.send(t), mirrorFile: (f, c) => conn.sendFile(f, c).catch(() => {}) });
 }
 function stopAgentBot(id) { const b = agentBots.get(id); if (b) { b.stop(); agentBots.delete(id); } }
 
@@ -1578,6 +1610,7 @@ async function api(req, res, u) {
     const files = (Array.isArray(b.files) ? b.files : []).slice(0, 10).map((f) => ({ path: String(f.path || ''), name: String(f.name || ''), image: !!f.image })).filter((f) => f.path);
     const note = files.length ? `\n\n[Ekli dosyalar — Read aracıyla oku]\n${files.map((f) => f.path).join('\n')}` : '';
     addMsg(id, 'user', text, files.length ? { files } : {});
+    { const T = tgFor(id); if (T.enabled && T.mirrorFile) for (const f of files) { tgNoEcho.add(f.path); T.mirrorFile(f.path, `🖥 Hub'dan: ${text.slice(0, 200)}`); } }
     enqueue(id, text + note, 'user', 0, extra);
     return send(res, 200, { ok: true, busy: isBusy(id) });
   }

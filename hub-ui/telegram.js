@@ -7,7 +7,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-function connect({ token, chat, offsetFile, onText, onUpdate, onCallback }) {
+function connect({ token, chat, offsetFile, onText, onMedia, onUpdate, onCallback }) {
   let stopped = false; let ctl = null; let offset = 0;
   try { offset = JSON.parse(fs.readFileSync(offsetFile, 'utf8')).offset || 0; } catch { /* ilk açılış */ }
   const saveOffset = () => { try { fs.writeFileSync(offsetFile, JSON.stringify({ offset })); } catch { /* */ } };
@@ -32,6 +32,25 @@ function connect({ token, chat, offsetFile, onText, onUpdate, onCallback }) {
     const r = await call(method, fd, 120000);
     if (!r.ok) throw new Error(r.description || 'gönderilemedi');
   }
+  // Telegram'dan gelen dosyayı indirir (bot API sınırı 20 MB)
+  async function download(fileId) {
+    const r = await call('getFile', form({ file_id: fileId }));
+    if (!r.ok || !r.result || !r.result.file_path) throw new Error(r.description || 'dosya alınamadı');
+    const res = await fetch(`https://api.telegram.org/file/bot${token}/${r.result.file_path}`, { signal: AbortSignal.timeout(120000) });
+    if (!res.ok) throw new Error(`indirilemedi (${res.status})`);
+    return { buf: Buffer.from(await res.arrayBuffer()), name: path.basename(r.result.file_path) };
+  }
+  // mesajdaki dosya/foto/video/ses → [{ file_id, name }]
+  function mediaOf(msg) {
+    const out = []; const stamp = msg.message_id;
+    if (msg.photo && msg.photo.length) out.push({ file_id: msg.photo[msg.photo.length - 1].file_id, name: `telegram-foto-${stamp}.jpg` });
+    for (const k of ['document', 'video', 'animation', 'audio', 'voice', 'video_note']) {
+      const d = msg[k]; if (!d) continue;
+      const ext = k === 'voice' ? '.ogg' : k === 'video_note' || k === 'video' || k === 'animation' ? '.mp4' : '';
+      out.push({ file_id: d.file_id, name: d.file_name || `telegram-${k}-${stamp}${ext}` });
+    }
+    return out;
+  }
   async function poll() {
     while (!stopped) {
       try {
@@ -51,13 +70,17 @@ function connect({ token, chat, offsetFile, onText, onUpdate, onCallback }) {
           }
           const msg = u.message;
           if (msg && String(msg.chat.id) === String(chat) && msg.text && onText) { try { await onText(msg.text); } catch { /* */ } }
+          else if (msg && String(msg.chat.id) === String(chat) && onMedia) {
+            const files = mediaOf(msg);
+            if (files.length) { try { await onMedia({ caption: msg.caption || '', files }, download); } catch (e) { send(`⚠️ Dosya alınamadı: ${e.message}`); } }
+          }
         }
       } catch { if (!stopped) await new Promise((res) => setTimeout(res, 5000)); }
     }
   }
   poll();
   return {
-    send, sendFile, enabled: true,
+    send, sendFile, download, enabled: true,
     call: (m, o) => call(m, form(o || {})),
     stop() { stopped = true; try { ctl && ctl.abort(); } catch { /* */ } },
   };
@@ -72,7 +95,7 @@ function createTelegram({ dir, h }) {
   } catch { /* ayar yok */ }
   const token = cfg.TELEGRAM_BOT_TOKEN; const chat = String(cfg.TELEGRAM_CHAT_ID || '');
   const enabled = !!(token && chat);
-  const none = { enabled: false, chat: '', send: async () => {}, sendFile: async () => { throw new Error('Telegram ayarlı değil'); }, mirror() {}, current: () => '', call: async () => ({}), info: async () => ({ enabled: false }), newBotLink: () => '' };
+  const none = { enabled: false, chat: '', send: async () => {}, sendFile: async () => { throw new Error('Telegram ayarlı değil'); }, mirror() {}, mirrorFile() {}, current: () => '', call: async () => ({}), info: async () => ({ enabled: false }), newBotLink: () => '' };
   if (!enabled) return none;
 
   let st = { current: '', muted: false };
@@ -101,7 +124,7 @@ function createTelegram({ dir, h }) {
   }
   const offFile = path.join(dir, 'telegram-offset.json');
   if (!fs.existsSync(offFile) && st.offset) { try { fs.writeFileSync(offFile, JSON.stringify({ offset: st.offset })); } catch { /* */ } }
-  const bot = connect({ token, chat, offsetFile: offFile, onText: handle, onCallback: (d) => h.callback(d), onUpdate: (u) => (u.managed_bot ? h.managedBot(u.managed_bot) : undefined) });
+  const bot = connect({ token, chat, offsetFile: offFile, onText: handle, onMedia: (m, dl) => { const a = cur(); return a ? h.media(a.id, m, dl) : bot.send('Henüz agent yok.'); }, onCallback: (d) => h.callback(d), onUpdate: (u) => (u.managed_bot ? h.managedBot(u.managed_bot) : undefined) });
 
   let infoCache = null; let infoAt = 0;
   const info = async (fresh) => {
@@ -112,6 +135,7 @@ function createTelegram({ dir, h }) {
   return {
     enabled, chat, token, send: bot.send, sendFile: bot.sendFile, call: bot.call, info,
     mirror: (text) => { if (!st.muted) bot.send(text); },
+    mirrorFile: (file, caption) => { if (!st.muted) bot.sendFile(file, caption).catch(() => {}); },
     current: () => (cur() || {}).id,
     newBotLink: (manager, username, name) => `https://t.me/newbot/${manager}/${username}?name=${encodeURIComponent(name)}`,
   };

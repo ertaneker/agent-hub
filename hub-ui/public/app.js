@@ -292,12 +292,13 @@ function slashMatches() {
   const all = [...HUB_CMDS, ...cli];
   const starts = all.filter((c) => c[0].toLowerCase().startsWith(w));
   const rest = all.filter((c) => !starts.includes(c) && (c[0].split(':').pop().toLowerCase().startsWith(w) || (w.length >= 3 && c[0].toLowerCase().includes(w))));
-  return [...starts, ...rest].slice(0, 12);
+  return [...starts, ...rest].slice(0, 300);
 }
 function renderSlash() {
   const m = slashMatches(); const box = $('#slashBox');
   box.hidden = !m.length; if (slashIdx >= m.length) slashIdx = 0;
   box.innerHTML = m.map((c, i) => `<div data-cmd="${esc(c[0])}" class="${i === slashIdx ? 'on' : ''}"><b>/${esc(c[0])}</b><span>${esc(c[1])}</span></div>`).join('');
+  const on = box.querySelector('.on'); if (on) on.scrollIntoView({ block: 'nearest' });
 }
 $('#slashBox').onclick = (e) => { const d = e.target.closest('[data-cmd]'); if (d) { inp.value = '/' + d.dataset.cmd + ' '; renderSlash(); inp.focus(); } };
 inp.oninput = () => { grow(); renderSlash(); };
