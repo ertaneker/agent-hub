@@ -1043,7 +1043,8 @@ function handleCallback(data) {
 function rateSummary() {
   if (!rateInfo) return null;
   const w = rateInfo.unifiedWindows || {};
-  return { status: rateInfo.status, five: w.five_hour ? Math.round((w.five_hour.utilization || 0) * 100) : null, week: w.seven_day ? Math.round((w.seven_day.utilization || 0) * 100) : null, resets: rateInfo.resetsAt };
+  const rs = (x) => { const v = x && (x.resets_at ?? x.resetsAt); return v ? Number(v) : null; }; // saniye (epoch)
+  return { status: rateInfo.status, five: w.five_hour ? Math.round((w.five_hour.utilization || 0) * 100) : null, week: w.seven_day ? Math.round((w.seven_day.utilization || 0) * 100) : null, resets: rateInfo.resetsAt, fiveResets: rs(w.five_hour), weekResets: rs(w.seven_day) };
 }
 function progress(p, line) {
   const a = getAgent(p.agentId); const T = tgFor(p.agentId);

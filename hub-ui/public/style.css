@@ -63,6 +63,8 @@ code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:.92em}
 .m.tool_result{color:var(--faint);font-size:12px;margin:0 0 8px 14px;max-height:3.2em;overflow:hidden;border-left:2px solid var(--line);padding-left:8px;cursor:pointer}
 .m.tool_result.open{max-height:none}
 .m.tool_result.err{color:var(--err)}
+.m.mediarow{margin:0 0 12px 14px;white-space:normal}
+.media{white-space:normal}
 .m.system{color:var(--faint);font-size:12px}
 .m.system.err{color:var(--err)}
 .m.agent_in{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:8px;padding:8px 12px}

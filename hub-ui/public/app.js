@@ -35,7 +35,9 @@ function renderSide() {
     return `<button class="ag ${a.id === S.cur ? 'sel' : ''}" data-id="${a.id}" title="Çift tıkla: yeniden adlandır"><span class="em">${esc(a.emoji)}</span><span class="nm"><b>${esc(a.name)}${a.tg_on ? ' <span title="Kendi Telegram botu var: @' + esc(a.tg_username) + '" style="color:var(--acc)">✈</span>' : ''}</b><small>${esc(sub)}</small></span>${b}<span class="dot ${st}"></span></button>`;
   }).join('') || '<div class="side-label" style="padding:12px">Henüz agent yok</div>';
   const n = S.running.size;
-  const rt = S.rate ? ` · limit %${S.rate.five ?? '?'} (5sa) %${S.rate.week ?? '?'} (hafta)` : '';
+  const left = (s) => { const ms = s * 1000 - Date.now(); if (!s || ms <= 0) return ''; const m = Math.ceil(ms / 60000); return m >= 1440 ? `${Math.floor(m / 1440)}g ${Math.floor(m % 1440 / 60)}sa` : m >= 60 ? `${Math.floor(m / 60)}sa ${m % 60}dk` : `${m}dk`; };
+  const fl = S.rate && left(S.rate.fiveResets);
+  const rt = S.rate ? ` · limit %${S.rate.five ?? '?'} (5sa${fl ? ', ' + fl + ' kaldı' : ''}) %${S.rate.week ?? '?'} (hafta)` : '';
   $('#sideFoot').textContent = `${S.agents.length} agent · ${n} çalışıyor${rt}`;
   const pend = S.agents.reduce((s, a) => s + (a.pending || 0), 0);
   document.title = `${pend ? '(' + pend + ') ' : ''}Agent Hub`;
@@ -97,7 +99,7 @@ function msgHtml(m) {
   const t = m.role;
   if (t === 'assistant') return `<div class="m assistant">${md(m.text)}${mediaView(m.agent_id || S.cur, m.meta.media)}</div>`;
   if (t === 'tool') return `<div class="m tool">${esc(m.text)}</div>`;
-  if (t === 'tool_result') return `<div class="m tool_result ${m.meta.is_error ? 'err' : ''}">${esc(m.text)}${mediaView(m.agent_id || S.cur, m.meta.media)}</div>`;
+  if (t === 'tool_result') return `<div class="m tool_result ${m.meta.is_error ? 'err' : ''}">${esc(m.text)}</div>${m.meta.media ? `<div class="m mediarow">${mediaView(m.agent_id || S.cur, m.meta.media)}</div>` : ''}`;
   if (t === 'agent_in') return `<div class="m agent_in"><small>↘ agent mesajı · ${fmtT(m.ts)}</small>${esc(m.text)}${cur() && cur().autonomy === 'ask' ? `<br><button data-process="${m.id}">İşle</button>` : ''}</div>`;
   if (t === 'user') return `<div class="m user">${esc(m.text)}${m.meta.files ? `<div class="files">${m.meta.files.map((f) => fileView(m.agent_id || S.cur, f)).join('')}</div>` : ''}</div>`;
   return `<div class="m system ${m.meta.is_error ? 'err' : ''}">${esc(m.text)}</div>`;
